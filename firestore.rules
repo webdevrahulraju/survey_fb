@@ -1,0 +1,262 @@
+rules_version = '2';
+
+// Firestore security rules for the delight-survey-f17b1 project.
+//
+// This is the SINGLE source of truth — deploy from survey_fb/. The Flutter
+// repos (delight_survey, ai_survey) no longer carry their own copies.
+//
+// Rules mirror the client-side `PermissionService` but are the
+// authoritative gate — the client checks are UX only. Rules are based on
+// the `role` field on the user's `users/{uid}` document. Roles:
+//   - admin           → full access
+//   - manager         → read all surveys/masters, write masters, write own surveys
+//   - surveyor        → read masters, read/write only own surveys
+//   - online_customer → read/write own survey only (custom-claim auth)
+//   - user            → read/write own survey only (survey-scoped, custom claim)
+//
+// Deploy with: `firebase deploy --only firestore:rules` from survey_fb/.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ───── Helpers ──────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userRole() {
+      return userDoc().role;
+    }
+
+    function userIsActive() {
+      // Treat missing isActive as active, for legacy docs.
+      return !('isActive' in userDoc()) || userDoc().isActive == true;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userIsActive() && userRole() == 'admin';
+    }
+
+    function isManager() {
+      return isSignedIn() && userIsActive() && userRole() == 'manager';
+    }
+
+    function isSurveyor() {
+      return isSignedIn() && userIsActive() && userRole() == 'surveyor';
+    }
+
+    function isAdminOrManager() {
+      return isAdmin() || isManager();
+    }
+
+    function isActiveSignedIn() {
+      return isSignedIn() && userIsActive();
+    }
+
+    // Online customer — authenticated via custom token with claims.
+    function isOnlineCustomer() {
+      return isSignedIn()
+          && request.auth.token.role == 'online_customer'
+          && request.auth.token.onlineSurveyId is string;
+    }
+
+    function isOnlineCustomerForSurvey(surveyId) {
+      return isOnlineCustomer()
+          && request.auth.token.onlineSurveyId == surveyId;
+    }
+
+    // Survey-scoped user — provisioned by createSurveyUserAccount.
+    // Custom claim { role: 'user', surveyId: <id> } binds the user to
+    // exactly one survey. Access is also gated on the survey not being
+    // completed — checked at the rule sites that reference the survey.
+    function isSurveyUser() {
+      return isSignedIn()
+          && userIsActive()
+          && request.auth.token.role == 'user'
+          && request.auth.token.surveyId is string;
+    }
+
+    function isSurveyUserFor(surveyId) {
+      return isSurveyUser()
+          && request.auth.token.surveyId == surveyId;
+    }
+
+    // Status is an integer pushed by the Flutter client; 4 = Completed
+    // (see AppConstants in delight_survey).
+    function surveyOpen(surveyId) {
+      return get(/databases/$(database)/documents/surveys/$(surveyId)).data.status != 4;
+    }
+
+    function ownsResource() {
+      return isSignedIn()
+          && resource != null
+          && 'createdBy' in resource.data
+          && resource.data.createdBy == request.auth.uid;
+    }
+
+    function ownsIncomingResource() {
+      return isSignedIn()
+          && 'createdBy' in request.resource.data
+          && request.resource.data.createdBy == request.auth.uid;
+    }
+
+    // ───── Users ───────────────────────────────────────────────────
+    // Admin manages every user doc. Any signed-in user can read and
+    // update their own doc (for lastLoginAt bookkeeping in
+    // FirebaseAuthRepository).
+    match /users/{userId} {
+      allow read: if isAdmin()
+                  || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isAdmin()
+                  || (isSignedIn() && request.auth.uid == userId);
+      allow update: if isAdmin()
+                  || (isSignedIn() && request.auth.uid == userId
+                      // Self-updates cannot change role or isActive.
+                      && !('role' in request.resource.data.diff(resource.data).affectedKeys())
+                      && !('isActive' in request.resource.data.diff(resource.data).affectedKeys()));
+      allow delete: if isAdmin();
+
+      // Per-user config (key-value settings).
+      match /config/{docId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // ───── Usernames (unique-index for survey-scoped users) ───────
+    // Written only by the createSurveyUserAccount callable via admin
+    // SDK. Admins may read for support; everyone else is denied.
+    match /usernames/{username} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // ───── Surveys & survey-owned data ─────────────────────────────
+    // Admin/manager see and manage everything. Surveyors may read and
+    // update (but NOT delete) their own records. Deletion is reserved
+    // for admin and manager only, matching the client-side permission
+    // matrix (`AppPermission.deleteAnySurvey`).
+    match /surveys/{surveyId} {
+      allow read:   if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource())
+                    || isOnlineCustomerForSurvey(surveyId)
+                    || isSurveyUserFor(surveyId);
+      allow create: if isActiveSignedIn() && ownsIncomingResource();
+      allow update: if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource())
+                    || (isOnlineCustomerForSurvey(surveyId)
+                        && !('onlineAuth' in request.resource.data.diff(resource.data).affectedKeys()))
+                    || (isSurveyUserFor(surveyId)
+                        && resource.data.status != 4
+                        && !('assignedUid' in request.resource.data.diff(resource.data).affectedKeys())
+                        && !('status' in request.resource.data.diff(resource.data).affectedKeys()));
+      allow delete: if isAdminOrManager();
+
+      // Survey-owned subcollections written by the sync layer:
+      //   addresses, checklists, crating, items, manpower, packing, pets,
+      //   photos, quotations, quotation_charges, quotation_items,
+      //   quotation_taxes, storage_charges, vehicles
+      // Access mirrors the parent survey: admins/managers always; the
+      // survey's owner via parent.createdBy. The get() costs one extra
+      // billable read per evaluation.
+      function parentSurvey() {
+        return get(/databases/$(database)/documents/surveys/$(surveyId)).data;
+      }
+      function ownsParentSurvey() {
+        return isActiveSignedIn()
+            && 'createdBy' in parentSurvey()
+            && parentSurvey().createdBy == request.auth.uid;
+      }
+      match /{sub}/{docId} {
+        allow read, write: if isAdminOrManager()
+                           || ownsParentSurvey()
+                           || isOnlineCustomerForSurvey(surveyId)
+                           || (isSurveyUserFor(surveyId)
+                               && surveyOpen(surveyId));
+      }
+    }
+
+    match /enquiries/{docId} {
+      allow read:   if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource());
+      allow create: if isActiveSignedIn() && ownsIncomingResource();
+      allow update: if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource());
+      allow delete: if isAdminOrManager();
+    }
+
+    match /customers/{docId} {
+      allow read:   if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource());
+      allow create: if isActiveSignedIn() && ownsIncomingResource();
+      allow update: if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource());
+      allow delete: if isAdminOrManager();
+    }
+
+    match /quotations/{docId} {
+      allow read:   if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource());
+      allow create: if isActiveSignedIn() && ownsIncomingResource();
+      allow update: if isAdminOrManager()
+                    || (isActiveSignedIn() && ownsResource());
+      allow delete: if isAdminOrManager();
+    }
+
+    // ───── Master data ─────────────────────────────────────────────
+    // Read by any active signed-in user or online customer; write by
+    // admin or manager. The list below must include every Firestore
+    // collection written by a service in `lib/services/*_services.dart`.
+    // If you add a new master-data service, register the collection here.
+    match /articles/{docId}            { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /goods_types/{docId}         { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /customer_types/{docId}      { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /packing_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /packing_materials/{docId}   { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /vehicle_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /pet_types/{docId}           { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /room_types/{docId}          { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /address_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /volume_types/{docId}        { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /handyman/{docId}            { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /manpower/{docId}            { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /additional_services/{docId} { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /master_taxes/{docId}        { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /currencies/{docId}          { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /letter_templates/{docId}    { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /service_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /time_slots/{docId}          { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /product_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /rate_cards/{docId}          { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+
+    // Checklist master — code uses both names; handle both.
+    match /checklist_master/{docId}    { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /checklist_masters/{docId}   { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+
+    // Costing data — same naming split: 'costing_items' (sync) and
+    // 'costing_profiles' (services). Guard both.
+    match /costing_items/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /costing_profiles/{docId}    { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+
+    // ───── Sales CRM ───────────────────────────────────────────────
+    // Read by any active signed-in user; write by admin + manager.
+    // Surveyors are view-only by design (`AppPermission.viewSales`).
+    match /sales_customers/{docId}         { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_contacts/{docId}          { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_addresses/{docId}         { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_notes/{docId}             { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_tasks/{docId}             { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_mails/{docId}             { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_messages/{docId}          { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_message_templates/{docId} { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+    match /sales_calendar/{docId}          { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
+
+    // ───── Default deny ────────────────────────────────────────────
+    // Any collection not explicitly matched above rejects all access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

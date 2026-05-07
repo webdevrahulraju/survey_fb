@@ -1,0 +1,105 @@
+rules_version = '2';
+
+// Delight Survey — Firebase Storage rules.
+//
+// Single source of truth — deploy from survey_fb/. The delight_survey
+// Flutter repo no longer carries its own copy.
+//
+// Path layout mirrors `FirestoreDataService.uploadPhoto`:
+//   photos/{uid}/{surveyId}/{tag}_{itemId}_{photoId}.jpg
+//   photos/{uid}/{surveyId}/thumbs/{tag}_{itemId}_{photoId}.jpg
+//   signatures/{uid}/{surveyId}/{role}_{uuid}.png
+//   exports/{uid}/{kind}/{uuid}.{ext}
+//
+// Access model:
+//   - Users (surveyors) can read + write under their own UID prefix.
+//   - Managers + admins can read everyone's prefix. Write still requires
+//     they own the path (they upload for their own users/{uid} doc).
+//   - Default: deny.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ─── Helpers ────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function role() {
+      return userDoc().role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && role() == 'admin';
+    }
+
+    function isManager() {
+      return isSignedIn() && (role() == 'manager' || isAdmin());
+    }
+
+    function isManagerOrAdmin() {
+      return isManager();
+    }
+
+    // Shared image-content + size guard.
+    function isValidImage() {
+      return request.resource != null
+          && request.resource.size <= 15 * 1024 * 1024
+          && request.resource.contentType.matches('image/.*');
+    }
+
+    function isValidPdf() {
+      return request.resource != null
+          && request.resource.size <= 25 * 1024 * 1024
+          && request.resource.contentType.matches('application/pdf');
+    }
+
+    function isValidExportPayload() {
+      return request.resource != null
+          && request.resource.size <= 50 * 1024 * 1024;
+    }
+
+    // ─── Photos ────────────────────────────────────────────────────
+    // Full-size survey photos.
+    match /photos/{uid}/{surveyId}/{fileName} {
+      allow read:   if isOwner(uid) || isManagerOrAdmin();
+      allow write:  if isOwner(uid) && isValidImage();
+      allow delete: if isOwner(uid) || isManagerOrAdmin();
+    }
+
+    // Thumbnails live under photos/{uid}/{surveyId}/thumbs/{fileName}.
+    match /photos/{uid}/{surveyId}/thumbs/{fileName} {
+      allow read:   if isOwner(uid) || isManagerOrAdmin();
+      allow write:  if isOwner(uid) && isValidImage();
+      allow delete: if isOwner(uid) || isManagerOrAdmin();
+    }
+
+    // ─── Signatures ───────────────────────────────────────────────
+    // Customer + surveyor signatures. PNG or JPEG.
+    match /signatures/{uid}/{surveyId}/{fileName} {
+      allow read:   if isOwner(uid) || isManagerOrAdmin();
+      allow write:  if isOwner(uid) && isValidImage();
+      allow delete: if isOwner(uid) || isManagerOrAdmin();
+    }
+
+    // ─── Exports (PDFs / Excel) ───────────────────────────────────
+    match /exports/{uid}/{kind}/{fileName} {
+      allow read:   if isOwner(uid) || isManagerOrAdmin();
+      allow write:  if isOwner(uid) && (isValidPdf() || isValidExportPayload());
+      allow delete: if isOwner(uid) || isManagerOrAdmin();
+    }
+
+    // ─── Catch-all deny ────────────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
