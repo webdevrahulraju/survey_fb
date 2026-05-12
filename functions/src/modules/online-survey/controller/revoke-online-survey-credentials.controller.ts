@@ -1,6 +1,8 @@
 import {onCall, HttpsError} from "firebase-functions/v2/https";
 import {firestore, auth} from "../../../config/firebase";
 
+const ALLOWED_ROLES = new Set(["admin", "manager", "surveyor"]);
+
 export const revokeOnlineSurveyCredentials = onCall(async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -11,10 +13,10 @@ export const revokeOnlineSurveyCredentials = onCall(async (request) => {
     .doc(request.auth.uid)
     .get();
   const role = callerDoc.data()?.role;
-  if (role !== "admin" && role !== "manager") {
+  if (!ALLOWED_ROLES.has(role)) {
     throw new HttpsError(
       "permission-denied",
-      "Admin or manager role required."
+      "Admin, manager, or surveyor role required."
     );
   }
 
@@ -26,26 +28,42 @@ export const revokeOnlineSurveyCredentials = onCall(async (request) => {
     );
   }
 
-  const surveyRef = firestore().collection("surveys").doc(surveyId);
+  const db = firestore();
+  const surveyRef = db.collection("surveys").doc(surveyId);
   const snap = await surveyRef.get();
   if (!snap.exists) {
     throw new HttpsError("not-found", "Survey not found.");
   }
 
-  if (!snap.data()?.onlineAuth) {
+  const onlineAuth = snap.data()?.onlineAuth;
+  if (!onlineAuth) {
     throw new HttpsError(
       "failed-precondition",
       "No online access configured."
     );
   }
 
-  // Revoke in Firestore.
-  await surveyRef.update({
-    "onlineAuth.isRevoked": true,
-  });
-
-  // Disable Firebase Auth user.
   const uid = `online_survey_${surveyId}`;
+  const userRef = db.collection("online_survey_users").doc(uid);
+
+  // Disable in Firestore — both onlineAuth.isRevoked (for UI badge) and
+  // online_survey_users/{uid}.isActive (gates LoginBloc.getUserById
+  // which is what the ai_survey login uses to admit the customer).
+  const batch = db.batch();
+  batch.update(surveyRef, {"onlineAuth.isRevoked": true});
+  batch.set(userRef, {isActive: false}, {merge: true});
+
+  const username = typeof onlineAuth.username === "string" ?
+    onlineAuth.username :
+    null;
+  if (username) {
+    batch.delete(db.collection("usernames").doc(username));
+  }
+  await batch.commit();
+
+  // Disable Firebase Auth user. Belt-and-suspenders: even if the
+  // Firestore update raced an in-flight token refresh, signInWithEmail
+  // will now reject.
   try {
     await auth().updateUser(uid, {disabled: true});
   } catch {

@@ -9,7 +9,8 @@ const STATUS_COMPLETED = 4;
 /**
  * Firestore trigger: when a survey's status changes to completed,
  * automatically disable the online customer's Firebase Auth account
- * so they can no longer log in.
+ * AND deactivate their online_survey_users/{uid} profile so the
+ * ai_survey LoginBloc rejects them at the profile-fetch step too.
  */
 export const onSurveyCompleted = onDocumentUpdated(
   "surveys/{surveyId}",
@@ -30,15 +31,23 @@ export const onSurveyCompleted = onDocumentUpdated(
     if (after.onlineAuth.isRevoked) return;
 
     const surveyId = event.params.surveyId;
-
-    // Mark as revoked in Firestore.
-    await firestore()
-      .collection("surveys")
-      .doc(surveyId)
-      .update({"onlineAuth.isRevoked": true});
-
-    // Disable the Firebase Auth user.
     const uid = `online_survey_${surveyId}`;
+    const db = firestore();
+    const userRef = db.collection("online_survey_users").doc(uid);
+    const surveyRef = db.collection("surveys").doc(surveyId);
+
+    const batch = db.batch();
+    batch.update(surveyRef, {"onlineAuth.isRevoked": true});
+    batch.set(userRef, {isActive: false}, {merge: true});
+
+    const username = typeof after.onlineAuth.username === "string" ?
+      after.onlineAuth.username :
+      null;
+    if (username) {
+      batch.delete(db.collection("usernames").doc(username));
+    }
+    await batch.commit();
+
     try {
       await auth().updateUser(uid, {disabled: true});
     } catch {
