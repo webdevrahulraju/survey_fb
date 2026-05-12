@@ -1,24 +1,25 @@
 import {onCall, HttpsError} from "firebase-functions/v2/https";
 import {firestore} from "../../../config/firebase";
 import {
-  createSurveyUser,
+  provisionStaffUser,
   ProvisioningError,
   validateInput,
-} from "../services/user-provisioning.service";
+} from "../services/staff-provisioning.service";
 
 /**
- * Callable: provision a survey-scoped user (role 'user') tied to one
- * surveyId. Caller must be admin or manager. The created user can sign
- * in with email + password; username is exposed to the user and
- * resolved via the `usernames/{username}` collection.
+ * Callable: provision an internal staff user (admin / manager / surveyor).
+ * Caller must be an active admin. Creates a Firebase Auth account,
+ * sets the `role` custom claim, and writes `users/{uid}` with the same
+ * shape as `UserModel.toMap()` on the Flutter client.
  *
  * Payload:
- *   { surveyId, username, password, email, phoneNumber, name }
+ *   { email, password, role, firstName, lastName, company,
+ *     designation, mobile, countryCode }
  *
  * Returns:
- *   { success: true, uid: string, username: string }
+ *   { success: true, uid, email, role }
  */
-export const createSurveyUserAccount = onCall(
+export const createStaffUser = onCall(
   {memory: "256MiB", timeoutSeconds: 60},
   async (request) => {
     if (!request.auth) {
@@ -33,11 +34,10 @@ export const createSurveyUserAccount = onCall(
     const callerData = callerSnap.data() ?? {};
     const callerRole = callerData.role;
     const callerActive = callerData.isActive !== false;
-    if (!callerActive ||
-        (callerRole !== "admin" && callerRole !== "manager")) {
+    if (!callerActive || callerRole !== "admin") {
       throw new HttpsError(
         "permission-denied",
-        "Only an admin or manager can create survey users.",
+        "Only an admin can create users.",
       );
     }
 
@@ -52,8 +52,13 @@ export const createSurveyUserAccount = onCall(
     }
 
     try {
-      const result = await createSurveyUser({...validated, callerUid});
-      return {success: true, uid: result.uid, username: result.username};
+      const result = await provisionStaffUser({...validated, callerUid});
+      return {
+        success: true,
+        uid: result.uid,
+        email: result.email,
+        role: result.role,
+      };
     } catch (err) {
       if (err instanceof ProvisioningError) {
         throw new HttpsError(err.code, err.message, {field: err.field});
@@ -63,5 +68,3 @@ export const createSurveyUserAccount = onCall(
     }
   },
 );
-
-

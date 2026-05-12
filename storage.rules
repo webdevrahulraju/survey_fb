@@ -5,10 +5,12 @@ rules_version = '2';
 // Single source of truth — deploy from survey_fb/. The delight_survey
 // Flutter repo no longer carries its own copy.
 //
-// Path layout mirrors `FirestoreDataService.uploadPhoto`:
+// Path layout mirrors `FirestoreDataService.uploadPhoto` /
+// `uploadVoiceNote`:
 //   photos/{uid}/{surveyId}/{tag}_{itemId}_{photoId}.jpg
 //   photos/{uid}/{surveyId}/thumbs/{tag}_{itemId}_{photoId}.jpg
 //   signatures/{uid}/{surveyId}/{role}_{uuid}.png
+//   voice_notes/{uid}/{surveyId}/{itemId}_{timestamp}.{m4a|mp3|aac|wav}
 //   exports/{uid}/{kind}/{uuid}.{ext}
 //
 // Access model:
@@ -67,6 +69,13 @@ service firebase.storage {
           && request.resource.size <= 50 * 1024 * 1024;
     }
 
+    // Voice notes: 10 MB cap, must declare an audio MIME type.
+    function isValidAudio() {
+      return request.resource != null
+          && request.resource.size <= 10 * 1024 * 1024
+          && request.resource.contentType.matches('audio/.*');
+    }
+
     // ─── Photos ────────────────────────────────────────────────────
     // Full-size survey photos.
     match /photos/{uid}/{surveyId}/{fileName} {
@@ -87,6 +96,14 @@ service firebase.storage {
     match /signatures/{uid}/{surveyId}/{fileName} {
       allow read:   if isOwner(uid) || isManagerOrAdmin();
       allow write:  if isOwner(uid) && isValidImage();
+      allow delete: if isOwner(uid) || isManagerOrAdmin();
+    }
+
+    // ─── Voice notes ──────────────────────────────────────────────
+    // Audio recordings attached to survey items.
+    match /voice_notes/{uid}/{surveyId}/{fileName} {
+      allow read:   if isOwner(uid) || isManagerOrAdmin();
+      allow write:  if isOwner(uid) && isValidAudio();
       allow delete: if isOwner(uid) || isManagerOrAdmin();
     }
 

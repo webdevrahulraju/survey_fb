@@ -6,12 +6,15 @@ rules_version = '2';
 // repos (delight_survey, ai_survey) no longer carry their own copies.
 //
 // Rules mirror the client-side `PermissionService` but are the
-// authoritative gate — the client checks are UX only. Rules are based on
-// the `role` field on the user's `users/{uid}` document. Roles:
-//   - admin           → full access
-//   - manager         → read all surveys/masters, write masters, write own surveys
-//   - surveyor        → read masters, read/write only own surveys
-//   - online_customer → read/write own survey only (custom-claim auth)
+// authoritative gate — the client checks are UX only. Staff roles
+// (admin/manager/surveyor) live in `users/{uid}.role`. Online customers
+// have NO `users/{uid}` doc — their profile lives in
+// `online_survey_users/{uid}` and their access is gated by the custom
+// claim `role == 'online_customer'`. Roles:
+//   - admin           → full access (users/{uid})
+//   - manager         → read all surveys/masters, write masters, write own surveys (users/{uid})
+//   - surveyor        → read masters, read/write only own surveys (users/{uid})
+//   - online_customer → read/write own survey only (custom claim + online_survey_users/{uid})
 //   - user            → read/write own survey only (survey-scoped, custom claim)
 //
 // Deploy with: `firebase deploy --only firestore:rules` from survey_fb/.
@@ -21,6 +24,15 @@ service cloud.firestore {
     // ───── Helpers ──────────────────────────────────────────────────
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function hasStaffDoc() {
+      // Online customers DO NOT have a users/{uid} doc — their profile
+      // lives in online_survey_users/{uid}. Guarding every role check
+      // with exists() prevents `get()` of a missing doc from throwing
+      // and denying the entire rule for online-customer evaluations.
+      return isSignedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     function userDoc() {
@@ -37,15 +49,15 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && userIsActive() && userRole() == 'admin';
+      return hasStaffDoc() && userIsActive() && userRole() == 'admin';
     }
 
     function isManager() {
-      return isSignedIn() && userIsActive() && userRole() == 'manager';
+      return hasStaffDoc() && userIsActive() && userRole() == 'manager';
     }
 
     function isSurveyor() {
-      return isSignedIn() && userIsActive() && userRole() == 'surveyor';
+      return hasStaffDoc() && userIsActive() && userRole() == 'surveyor';
     }
 
     function isAdminOrManager() {
@@ -53,7 +65,7 @@ service cloud.firestore {
     }
 
     function isActiveSignedIn() {
-      return isSignedIn() && userIsActive();
+      return hasStaffDoc() && userIsActive();
     }
 
     // Online customer — authenticated via custom token with claims.
@@ -123,6 +135,27 @@ service cloud.firestore {
       match /config/{docId} {
         allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
+    }
+
+    // ───── Online survey customers ─────────────────────────────────
+    // Written by the createOnlineSurveyCredentials callable via the
+    // admin SDK. The customer themselves may read (and update only
+    // bookkeeping fields on) their own doc — the ai_survey LoginBloc
+    // fetches it after sign-in. Admins/managers can manage for support;
+    // surveyors can read so they can verify a customer's profile from
+    // the survey list.
+    match /online_survey_users/{userId} {
+      allow read: if isAdmin()
+                  || isManager()
+                  || isSurveyor()
+                  || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+                  || (isSignedIn() && request.auth.uid == userId
+                      // Self-updates cannot change role or isActive.
+                      && !('role' in request.resource.data.diff(resource.data).affectedKeys())
+                      && !('isActive' in request.resource.data.diff(resource.data).affectedKeys()));
+      allow delete: if isAdmin();
     }
 
     // ───── Usernames (unique-index for survey-scoped users) ───────
@@ -228,6 +261,7 @@ service cloud.firestore {
     match /letter_templates/{docId}    { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
     match /service_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
     match /time_slots/{docId}          { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
+    match /time_slot_calendar/{docId}  { allow read: if isActiveSignedIn(); allow write: if isAdminOrManager(); }
     match /product_types/{docId}       { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
     match /rate_cards/{docId}          { allow read: if isActiveSignedIn() || isOnlineCustomer(); allow write: if isAdminOrManager(); }
 

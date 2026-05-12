@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>AI Survey — Sign in</title>
+  <style>
+    :root {
+      --bg: #f4f6fa;
+      --card: #ffffff;
+      --primary: #012a4a;
+      --primary-soft: #e4ecf3;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --success: #16a34a;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap {
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 24px 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--card);
+      border-radius: 16px;
+      padding: 28px 24px;
+      box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .brand-dot {
+      width: 28px;
+      height: 28px;
+      background: var(--primary);
+      border-radius: 8px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .brand-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--primary);
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 12px 0 6px 0;
+    }
+    .lead {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      margin: 0 0 20px 0;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      background: var(--primary-soft);
+      border: 1px solid rgba(1, 42, 74, 0.08);
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .row .label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .row .value {
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 15px;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .row .copy {
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 6px;
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .row .copy:active { background: rgba(1, 42, 74, 0.1); }
+    .row-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+    .actions {
+      margin-top: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      border: 0;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-secondary {
+      background: transparent;
+      color: var(--primary);
+      border: 1px solid var(--border);
+    }
+    .stores {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .stores a {
+      flex: 1;
+      text-align: center;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .footer {
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.5;
+    }
+    .toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: var(--success);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .missing {
+      padding: 14px;
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      color: #9a3412;
+      border-radius: 10px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --primary-soft: #1e3a5f;
+        --text: #f1f5f9;
+        --muted: #94a3b8;
+        --border: #334155;
+      }
+      .brand-dot { background: #3b82f6; }
+      .brand-name { color: #93c5fd; }
+      .btn-primary { background: #3b82f6; }
+      .btn-secondary { color: #93c5fd; }
+      .missing { background: #422006; border-color: #92400e; color: #fed7aa; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="brand">
+        <div class="brand-dot">D</div>
+        <div class="brand-name">Delight Survey</div>
+      </div>
+      <h1 id="title">Your AI Survey login</h1>
+      <p class="lead" id="lead">
+        Sign in to the AI Survey app on your phone using the credentials below.
+      </p>
+
+      <div id="creds"></div>
+      <div id="missing-banner" style="display:none" class="missing">
+        This link is missing the credentials. Ask your surveyor to send a fresh
+        link, or open the AI Survey app and sign in with the credentials they
+        already shared.
+      </div>
+
+      <div class="actions">
+        <a id="open-app" class="btn btn-primary" href="#" hidden>
+          Open in AI Survey app
+        </a>
+        <div class="stores">
+          <a href="https://play.google.com/store/apps/details?id=com.delight.aisurvey"
+             target="_blank" rel="noopener">Google Play</a>
+          <a href="https://apps.apple.com/app/id0000000000"
+             target="_blank" rel="noopener">App Store</a>
+        </div>
+      </div>
+
+      <p class="footer">
+        Don't have the app yet? Install it from the store and sign in with the
+        details above. The password isn't stored anywhere &mdash; copy it now.
+      </p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">Copied</div>
+
+  <script>
+    // Credentials arrive in the URL fragment (#...) so they never hit the
+    // server's access logs. Format: #e=<urlenc email>&p=<urlenc password>
+    // &u=<urlenc username>&n=<urlenc customer name>
+    function parseFragment() {
+      var frag = (window.location.hash || "").replace(/^#/, "");
+      var out = {};
+      if (!frag) return out;
+      frag.split("&").forEach(function (pair) {
+        var idx = pair.indexOf("=");
+        if (idx < 0) return;
+        var k = pair.slice(0, idx);
+        var v = pair.slice(idx + 1);
+        try { out[k] = decodeURIComponent(v.replace(/\+/g, "%20")); } catch (e) {}
+      });
+      return out;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function showToast(msg) {
+      var el = document.getElementById("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      setTimeout(function () { el.classList.remove("show"); }, 1400);
+    }
+
+    function copyText(text, label) {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function () {
+          showToast(label + " copied");
+        });
+        return;
+      }
+      // Fallback for older browsers / non-https contexts.
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); showToast(label + " copied"); }
+      finally { document.body.removeChild(ta); }
+    }
+
+    function row(label, value, opts) {
+      opts = opts || {};
+      var safeLabel = escapeHtml(label);
+      var safeValue = escapeHtml(value);
+      var copyId = "copy-" + label.replace(/[^a-z0-9]/gi, "");
+      return ''
+        + '<div class="row">'
+        + '  <div class="row-text">'
+        + '    <span class="label">' + safeLabel + '</span>'
+        + '    <span class="value">' + safeValue + '</span>'
+        + '  </div>'
+        + '  <button class="copy" data-copy="' + safeValue + '" '
+        + '    data-label="' + safeLabel + '">Copy</button>'
+        + '</div>';
+    }
+
+    var params = parseFragment();
+    var email = params.e || "";
+    var password = params.p || "";
+    var username = params.u || "";
+    var customerName = params.n || "";
+
+    var credsEl = document.getElementById("creds");
+    if (!email || !password) {
+      document.getElementById("missing-banner").style.display = "block";
+    } else {
+      if (customerName) {
+        document.getElementById("lead").textContent =
+          "Hi " + customerName + ", sign in to the AI Survey app on your phone using these details.";
+      }
+      var html = "";
+      html += row("Email (login)", email);
+      html += row("Password", password);
+      if (username) {
+        html += row("Username", username);
+      }
+      credsEl.innerHTML = html;
+
+      // Wire up per-row copy buttons.
+      Array.prototype.forEach.call(
+        document.querySelectorAll(".row .copy"),
+        function (btn) {
+          btn.addEventListener("click", function () {
+            copyText(btn.getAttribute("data-copy"), btn.getAttribute("data-label"));
+          });
+        }
+      );
+
+      // Phase 3: when the ai_survey app registers a custom URI scheme +
+      // an App Link / Universal Link, this button will deep-link to it.
+      // For now it just tries the custom scheme as a no-op fallback.
+      var openBtn = document.getElementById("open-app");
+      openBtn.hidden = false;
+      openBtn.href = "aisurvey://login?email=" + encodeURIComponent(email);
+      openBtn.addEventListener("click", function (e) {
+        // Best-effort attempt — if the scheme isn't registered, nothing
+        // happens and the user remains on this page with the credentials.
+      });
+    }
+  </script>
+</body>
+</html>
